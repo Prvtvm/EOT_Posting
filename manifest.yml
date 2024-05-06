@@ -1,0 +1,12 @@
+applications:
+  - name: data-posting
+    memory: 512M
+    buildpacks:
+      - nodejs_buildpack
+    command: node post.js
+    env:
+      CLIENT_ID: "sb-3ebb297b-4023-4d94-9926-007f970db6b5!b6931|iotae_service!b940"
+      CLIENT_SECRET: "c9c580b5-9206-408e-90f5-e2509d89f1e6$djKJZg7ppzMvSl7jQ7YIfagknKEpzNCpUwGipwYV-h0="
+      TOKEN_URL: "https://assetmagmt.authentication.eu20.hana.ondemand.com/oauth/token?grant_type=client_credentials"
+      POST_URL: "https://iot-ts-data-sap.cfapps.eu20.hana.ondemand.com/Timeseries/v1/Measurements"
+      TZ: "Asia/Kolkata"
