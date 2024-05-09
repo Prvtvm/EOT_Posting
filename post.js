@@ -4,32 +4,107 @@ const XLSX = require('xlsx');
 const path = require('path');
 const cron = require('node-cron');
 
-// Define a function to execute the script
-function executeScript() {
-    // Read JSON data from file
-    const jsonData = require("C:/response.json");
+const clientId = 'sb-3ebb297b-4023-4d94-9926-007f970db6b5!b6931|iotae_service!b940';
+const clientSecret = 'c9c580b5-9206-408e-90f5-e2509d89f1e6$djKJZg7ppzMvSl7jQ7YIfagknKEpzNCpUwGipwYV-h0=';
+const tokenGenerationUrl = 'https://assetmagmt.authentication.eu20.hana.ondemand.com/oauth/token?grant_type=client_credentials';
+const postUrl = 'https://iot-ts-data-sap.cfapps.eu20.hana.ondemand.com/Timeseries/v1/Measurements';
 
-    // Function to remove null values recursively from an object
-    function removeNull(obj) {
-        for (const key in obj) {
-            if (obj[key] === null) {
-                delete obj[key];
-            } else if (typeof obj[key] === 'object') {
-                removeNull(obj[key]);
-            }
-        }
-        return obj;
+async function generateAuthToken(clientId, clientSecret) {
+    try {
+        console.log('Generating access token...');
+        const response = await axios.post(tokenGenerationUrl, null, {
+            auth: { username: clientId, password: clientSecret }
+        });
+        console.log('Access token generated successfully.');
+        return response.data.access_token;
+    } catch (error) {
+        console.error('Error generating access token:', error.response ? error.response.data : error.message);
+        throw error;
     }
+}
 
-    // Remove null values from JSON data
-    const cleanedData = removeNull(jsonData);
+async function fetchResponse(authToken) {
+    console.log('Fetching response...');
+    try {
+        const currentDate = new Date();
+        const formattedDate = currentDate.toISOString();
+        const response = await axios.get(postUrl, {
+            params: {
+                fromTime: '2024-03-30T00:00:00.000Z', // Fixed date or change as needed
+                toTime: formattedDate,
+                objectId: 'E_20024005'
+            },
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        console.log('Response fetched successfully.');
+        
+        // Save the response as a JSON file in a folder
+        const folderName = 'responses';
+        const fileName = 'response.json';
+        const filePath = path.join(__dirname, folderName, fileName);
+        
+        // Convert response data to JSON string
+        const responseData = JSON.stringify(response.data, null, 2);
+        
+        // Write JSON data to file
+        await fs.promises.writeFile(filePath, responseData);
+        console.log(`Response saved as "${filePath}"`);
+        
+        return filePath; // Return the file path
+    } catch (error) {
+        console.error('Error fetching response:', error.response ? error.response.data : error.message);
+        throw error;
+    }
+}
 
-    // Extracting the Measures array from cleanedData
-    const measuresData = cleanedData.Values.map(item => item.Measures);
+async function postData() {
+    try {
+        // Get access token
+        const accessToken = await generateAuthToken(clientId, clientSecret);
+        
+        // Read JSON data from file
+        const filePath = path.join(__dirname, 'responses', 'response.json');
+        const jsonData = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+        
+        // Convert Excel data to Values array
+        const values = convertToValuesArray(jsonData.Values);
+        
+        // Construct the request body
+        const requestBody = {
+            Tags: {
+                objectId: "E_20024003", // You may modify this objectId as needed
+                CategoryId: "M",
+                Position: "P_3a9aa01d12db411fb3b6088e5623faf5"
+            },
+            Values: values
+        };
 
-    // Flattening the array of arrays into a single array of objects
-    const flattenedData = measuresData.reduce((acc, val) => acc.concat(val), []);
+        // Post data with access token
+        const response = await axios.post(postUrl, requestBody, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        console.log('Data posted successfully:', response.data);
+    } catch (error) {
+        console.error('Error posting data:', error.response ? error.response.data : error.message);
+    }
+}
 
+// Function to convert Excel data to the Values array: it's the accepted JSON format.
+function convertToValuesArray(jsonData) {
+    return jsonData.map(item => ({ // using map utility iterating over each item row-wise: basically modification of values.
+        C_1399: item.C_1399 ? item.C_1399.toString() : null,
+        C_1400: item.C_1400 ? item.C_1400.toString() : null,
+        C_1398: item.C_1398 ? item.C_1398.toString() : null,
+        _time: item._time || new Date().toISOString() // Include _time field or use current timestamp if not available
+    }));
+}
+
+
+// Function to save Excel file with the name derived from objectId
+async function saveExcelFile(objectId, flattenedData) {
     // Create a new workbook
     const workbook = XLSX.utils.book_new();
 
@@ -43,112 +118,50 @@ function executeScript() {
     const folderName = "Feed";
 
     // Define the output file path with the folder name
-    const outputPath = path.join(folderName, 'Temporary.xlsx');
+    const excelFileName = `${objectId}.xlsx`;
+    const excelFilePath = path.join(folderName, excelFileName);
 
     // Write workbook to XLSX file with the specified path
-    XLSX.writeFile(workbook, outputPath);
+    XLSX.writeFile(workbook, excelFilePath);
 
-    console.log(`XLSX file saved as "${outputPath}"!`);
-
-    // Define the file path to out.xlsx in the "Feed" folder
-    const filePath = path.join(__dirname, 'Feed', 'Temporary.xlsx');
-
-    // Read data from Excel
-    const workbook2 = XLSX.readFile(filePath);
-    const sheetName2 = workbook2.SheetNames[0];
-    const worksheet2 = workbook2.Sheets[sheetName2]; 
-
-    // Convert Excel data to JSON
-    const jsonData2 = XLSX.utils.sheet_to_json(worksheet2);
-
-    // Client credentials
-    const clientId = 'sb-3ebb297b-4023-4d94-9926-007f970db6b5!b6931|iotae_service!b940';
-    const clientSecret = 'c9c580b5-9206-408e-90f5-e2509d89f1e6$djKJZg7ppzMvSl7jQ7YIfagknKEpzNCpUwGipwYV-h0=';
-
-    // Token generation URL
-    const tokenGenerationUrl = 'https://assetmagmt.authentication.eu20.hana.ondemand.com/oauth/token?grant_type=client_credentials';
-
-    // POST URL
-    const postUrl = 'https://iot-ts-data-sap.cfapps.eu20.hana.ondemand.com/Timeseries/v1/Measurements';
-
-    // Function to generate access token
-    async function generateAccessToken() {
-        try {
-            const response = await axios.get(tokenGenerationUrl,  { 
-                auth: {
-                username: clientId,
-                password: clientSecret
-                } 
-            });
-            return response.data.access_token;
-        } catch (error) {
-            console.error('Error generating access token:', error.response ? error.response.data : error.message);
-            throw error;
-        }
-    }
-
-    // Function to convert Excel data to the Values array : it the accepted json format.
-    function convertToValuesArray(jsonData) {
-        return jsonData.map(item => ({ // using map utiity iterating over each item row-wise : basically modification of values.
-            C_1399: item.C_1399 ? item.C_1399.toString() : null,
-            C_1400: item.C_1400 ? item.C_1400.toString() : null,
-            C_1398: item.C_1398 ? item.C_1398.toString() : null,
-            _time: item._time
-        }));
-    }
-
-    // Function to save Excel file with the name derived from objectId
-    function saveExcelFile(objectId) {
-        const excelFileName = `${objectId}.xlsx`;
-        const excelFilePath = path.join(folderName, excelFileName);
-        fs.copyFileSync(outputPath, excelFilePath);
-        console.log(`Excel file saved as "${excelFilePath}"!`);
-    }
-
-    // Function to post data
-    async function postData() {
-        try {
-            // Get access token
-            const accessToken = await generateAccessToken();
-            
-            // Convert Excel data to Values array
-            const values = convertToValuesArray(jsonData2);
-
-            // Construct the request body
-            const requestBody = {
-                Tags: {
-                    objectId: "E_20024003", // You may modify this objectId as needed
-                    CategoryId: "M",
-                    Position: "P_3a9aa01d12db411fb3b6088e5623faf5"
-                },
-                Values: values
-            };
-
-            // Post data with access token
-            const response = await axios.post(postUrl, requestBody, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            console.log('Data posted successfully:', response.data);
-            
-            // Save Excel file with objectId as filename
-            saveExcelFile(requestBody.Tags.objectId);
-        } catch (error) {
-            console.error('Error posting data:', error.response ? error.response.data : error.message);
-        }
-    }
-
-    // Call the function to post data
-    postData();
+    console.log(`Excel file saved as "${excelFilePath}"!`);
 }
 
-// Schedule the cron job to run at 6 am on Monday and Wednesday in India timezone
-cron.schedule('0 6 * * 1,3', () => {
-    executeScript();
-}, {
-    timezone: 'Asia/Kolkata' // India timezone
-});
+async function executeScript() {
+    try {
+        const authToken = await generateAuthToken(clientId, clientSecret);
+        const filePath = await fetchResponse(authToken);
+        const jsonData = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 
-console.log('Script scheduled to run at 6 am on Monday and Wednesday in India timezone.');
+        // Remove null values from JSON data
+        const cleanedData = removeNull(jsonData);
+        
+        // Check if cleanedData.Values exists before attempting to access it
+        const measuresData = cleanedData.Values ? cleanedData.Values.map(item => item.Measures) : [];
+        
+        // Flattening the array of arrays into a single array of objects
+        const flattenedData = measuresData.reduce((acc, val) => acc.concat(val), []);
+        
+        // Save Excel file with objectId as filename
+        await saveExcelFile('E_20024003', flattenedData);
+
+        // Call postData to post data
+        await postData();
+    } catch (error) {
+        console.error('Error executing script:', error);
+    }
+}
+
+// Function to remove null values recursively from an object
+function removeNull(obj) {
+    for (const key in obj) {
+        if (obj[key] === null) {
+            delete obj[key];
+        } else if (typeof obj[key] === 'object') {
+            removeNull(obj[key]);
+        }
+    }
+    return obj;
+}
+
+executeScript();
