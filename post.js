@@ -9,16 +9,32 @@ const clientSecret = 'c9c580b5-9206-408e-90f5-e2509d89f1e6$djKJZg7ppzMvSl7jQ7YIf
 const tokenGenerationUrl = 'https://assetmagmt.authentication.eu20.hana.ondemand.com/oauth/token?grant_type=client_credentials';
 const postUrl = 'https://iot-ts-data-sap.cfapps.eu20.hana.ondemand.com/Timeseries/v1/Measurements';
 
-async function generateAuthToken(clientId, clientSecret) {
+// Function to generate access token for fetching data
+async function generateFetchAuthToken(clientId, clientSecret) {
     try {
-        console.log('Generating access token...');
+        console.log('Generating access token for fetching data...');
         const response = await axios.post(tokenGenerationUrl, null, {
             auth: { username: clientId, password: clientSecret }
         });
-        console.log('Access token generated successfully.');
+        console.log('Fetch data access token generated successfully.');
         return response.data.access_token;
     } catch (error) {
-        console.error('Error generating access token:', error.response ? error.response.data : error.message);
+        console.error('Error generating fetch data access token:', error.response ? error.response.data : error.message);
+        throw error;
+    }
+}
+
+// Function to generate access token for posting data
+async function generatePostAuthToken(clientId, clientSecret) {
+    try {
+        console.log('Generating access token for posting data...');
+        const response = await axios.post(tokenGenerationUrl, null, {
+            auth: { username: clientId, password: clientSecret }
+        });
+        console.log('Post data access token generated successfully.');
+        return response.data.access_token;
+    } catch (error) {
+        console.error('Error generating post data access token:', error.response ? error.response.data : error.message);
         throw error;
     }
 }
@@ -38,48 +54,51 @@ async function fetchResponse(authToken) {
         });
         console.log('Response fetched successfully.');
         
-        // Save the response as a JSON file in a folder
         const folderName = 'responses';
         const fileName = 'response.json';
         const filePath = path.join(__dirname, folderName, fileName);
         
-        // Convert response data to JSON string
         const responseData = JSON.stringify(response.data, null, 2);
         
-        // Write JSON data to file
         await fs.promises.writeFile(filePath, responseData);
         console.log(`Response saved as "${filePath}"`);
         
-        return filePath; // Return the file path
+        return filePath;
     } catch (error) {
         console.error('Error fetching response:', error.response ? error.response.data : error.message);
         throw error;
     }
 }
 
+function removeNull(obj) {
+    for (const key in obj) {
+        if (obj[key] === null) {
+            delete obj[key];
+        } else if (typeof obj[key] === 'object') {
+            removeNull(obj[key]);
+        }
+    }
+    return obj;
+}
+
 async function postData() {
     try {
-        // Get access token
-        const accessToken = await generateAuthToken(clientId, clientSecret);
+        const accessToken = await generatePostAuthToken(clientId, clientSecret);
         
-        // Read JSON data from file
         const filePath = path.join(__dirname, 'responses', 'response.json');
         const jsonData = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
         
-        // Convert Excel data to Values array
         const values = convertToValuesArray(jsonData.Values);
         
-        // Construct the request body
         const requestBody = {
             Tags: {
-                objectId: "E_20024003", // You may modify this objectId as needed
+                objectId: "E_20024003",
                 CategoryId: "M",
                 Position: "P_3a9aa01d12db411fb3b6088e5623faf5"
             },
             Values: values
         };
 
-        // Post data with access token
         const response = await axios.post(postUrl, requestBody, {
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
@@ -92,76 +111,49 @@ async function postData() {
     }
 }
 
-// Function to convert Excel data to the Values array: it's the accepted JSON format.
 function convertToValuesArray(jsonData) {
-    return jsonData.map(item => ({ // using map utility iterating over each item row-wise: basically modification of values.
+    return jsonData.map(item => ({
         C_1399: item.C_1399 ? item.C_1399.toString() : null,
         C_1400: item.C_1400 ? item.C_1400.toString() : null,
         C_1398: item.C_1398 ? item.C_1398.toString() : null,
-        _time: item._time || new Date().toISOString() // Include _time field or use current timestamp if not available
+        _time: item._time || new Date().toISOString()
     }));
 }
 
 
-// Function to save Excel file with the name derived from objectId
 async function saveExcelFile(objectId, flattenedData) {
-    // Create a new workbook
     const workbook = XLSX.utils.book_new();
-
-    // Add worksheet
     const worksheet = XLSX.utils.json_to_sheet(flattenedData);
-
-    // Add worksheet to workbook
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-
-    // Define the folder name
     const folderName = "Feed";
-
-    // Define the output file path with the folder name
     const excelFileName = `${objectId}.xlsx`;
     const excelFilePath = path.join(folderName, excelFileName);
-
-    // Write workbook to XLSX file with the specified path
     XLSX.writeFile(workbook, excelFilePath);
-
     console.log(`Excel file saved as "${excelFilePath}"!`);
 }
 
 async function executeScript() {
     try {
-        const authToken = await generateAuthToken(clientId, clientSecret);
-        const filePath = await fetchResponse(authToken);
+        const fetchAuthToken = await generateFetchAuthToken(clientId, clientSecret);
+        const postAuthToken = await generatePostAuthToken(clientId, clientSecret);
+        const filePath = await fetchResponse(fetchAuthToken);
         const jsonData = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
-
-        // Remove null values from JSON data
         const cleanedData = removeNull(jsonData);
-        
-        // Check if cleanedData.Values exists before attempting to access it
         const measuresData = cleanedData.Values ? cleanedData.Values.map(item => item.Measures) : [];
-        
-        // Flattening the array of arrays into a single array of objects
         const flattenedData = measuresData.reduce((acc, val) => acc.concat(val), []);
-        
-        // Save Excel file with objectId as filename
         await saveExcelFile('E_20024003', flattenedData);
-
-        // Call postData to post data
-        await postData();
+        await postData(postAuthToken);
     } catch (error) {
         console.error('Error executing script:', error);
     }
 }
 
-// Function to remove null values recursively from an object
-function removeNull(obj) {
-    for (const key in obj) {
-        if (obj[key] === null) {
-            delete obj[key];
-        } else if (typeof obj[key] === 'object') {
-            removeNull(obj[key]);
-        }
-    }
-    return obj;
-}
+// Schedule the cron job to run at 6 am on Monday and Wednesday
+cron.schedule('0 6 * * 1,3', () => {
+    console.log('Running script...');
+    executeScript();
+}, {
+    timezone: 'Asia/Kolkata' // India timezone
+});
 
-executeScript();
+console.log('Script scheduled to run at 6 am on Monday and Wednesday in India timezone.');
